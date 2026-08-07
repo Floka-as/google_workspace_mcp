@@ -51,6 +51,14 @@ Swap in a PVC (keeping `replicas: 1`) if that becomes annoying.
    make deploy      # kubectl apply -f k8s/app.yaml
    ```
 
+   ArgoCD needs its own read access to this fork, the same per-repo deploy-key
+   arrangement every other app here uses. Already done for this repo — the key
+   is the `argocd-gws-mcp (read-only)` deploy key on the GitHub side and the
+   `repo-gws-mcp` Secret (labelled `argocd.argoproj.io/secret-type=repository`)
+   in `kube-argocd`. Without it the Application reports
+   `ComparisonError: ... SSH_AUTH_SOCK not-specified`. To rotate: generate a new
+   ed25519 pair, `gh repo deploy-key add`, replace `sshPrivateKey` in the Secret.
+
 ## Shipping a change
 
 ```sh
