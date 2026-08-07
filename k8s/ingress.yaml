@@ -22,16 +22,42 @@ spec:
   - host: gws.mcphub.no
     http:
       paths:
-      # The whole host is routed, unlike fiken-mcp's /mcp-only ingress: OAuth 2.1
-      # needs /.well-known/oauth-*, /authorize, /token, /register and
-      # /oauth2callback reachable, and those are registered by FastMCP's OAuth
-      # proxy rather than by this repo, so enumerating them here would rot.
+      # Only these four prefixes, fiken-mcp style. In EXTERNAL_OAUTH21_PROVIDER
+      # mode the server issues no tokens, so /authorize, /token, /register and
+      # /oauth2callback do not exist to route (they 404).
       #
-      # What that also exposes: /health and / (version JSON) and
-      # /attachments/{uuid4} (capability URLs into an ephemeral spool). /mcp
-      # itself is protected — MCP_ENABLE_OAUTH21=true means an unauthenticated
-      # caller gets a 401 and a pointer to the authorization server.
-      - path: /
+      #   /mcp          the endpoint. 401 without a bearer token.
+      #   /.well-known  protected-resource metadata, pointing clients at Google.
+      #   /attachments  uuid4 capability URLs that the gmail and drive tools
+      #                 hand back to callers; unroutable means dead links.
+      #   /health       probes are in-cluster, but `make smoke` uses this.
+      #
+      # Deliberately not routed: `/`, which serves the version JSON.
+      - path: /mcp
+        pathType: Prefix
+        backend:
+          service:
+            name: gws-mcp
+            port:
+              number: 8000
+      # ImplementationSpecific, not Prefix: the API server warns that a
+      # dot-leading segment cannot be used with Prefix. nginx matches this as a
+      # prefix either way.
+      - path: /.well-known
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: gws-mcp
+            port:
+              number: 8000
+      - path: /attachments
+        pathType: Prefix
+        backend:
+          service:
+            name: gws-mcp
+            port:
+              number: 8000
+      - path: /health
         pathType: Prefix
         backend:
           service:

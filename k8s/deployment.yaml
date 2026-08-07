@@ -7,10 +7,10 @@ metadata:
     app: gws-mcp
 spec:
   replicas: 1
-  # Recreate, not RollingUpdate: OAuth 2.1 proxy state (authorization codes,
-  # PKCE verifiers, client registrations) lives in memory, and per-user Google
-  # credentials live on an emptyDir. Two pods serving the same host would hand
-  # out codes one of them cannot redeem.
+  # Recreate, not RollingUpdate: the attachment spool is an emptyDir, so two
+  # pods would each serve a different half of the /attachments URLs already
+  # handed out. Nothing else here is stateful — replicas could go up once
+  # attachments move to shared storage.
   strategy:
     type: Recreate
   selector:
@@ -42,20 +42,32 @@ spec:
         - containerPort: 8000
           name: http
         env:
-        # OAuth 2.1 multi-user: every caller runs its own Google consent flow
-        # against this host and gets its own token. The pod holds only the
-        # OAuth *client* credentials, never a user's refresh token on disk
-        # beyond the ephemeral volume below — the same shape as fiken-mcp's
-        # passthrough mode, which is what makes a public ingress defensible.
+        # Resource server only. Solvei owns the Google authorization-code flow
+        # (its own registered redirect URI, its own MCPServerConnection rows)
+        # and sends the resulting ya29.* access token here as a bearer. This
+        # server issues no tokens: /authorize, /token, /register and
+        # /oauth2callback do not exist, and nothing needs registering against
+        # gws.mcphub.no in the GCP console.
+        #
+        # ensure_session_from_access_token builds Credentials(token=<bearer>,
+        # refresh_token=None) and skips session storage in this mode, so the pod
+        # holds no user credentials at all — fiken-mcp's passthrough, exactly.
+        #
+        # Caveat worth knowing: validation is a userinfo call, which proves the
+        # token is live and whose it is but NOT that it was minted for our
+        # client. Any valid Google access token is accepted, acting on its own
+        # holder's data within its own scopes.
         - name: MCP_ENABLE_OAUTH21
+          value: "true"
+        - name: EXTERNAL_OAUTH21_PROVIDER
           value: "true"
         - name: WORKSPACE_MCP_HOST
           value: "0.0.0.0"
         - name: WORKSPACE_MCP_PORT
           value: "8000"
-        # Behind the nginx ingress: all OAuth endpoints and the redirect URI are
-        # advertised as this URL. https://gws.mcphub.no/oauth2callback must be
-        # registered on the Google OAuth client (see README-deploy.md).
+        # Behind the nginx ingress: this is the resource identifier advertised in
+        # /.well-known/oauth-protected-resource, and the base for the
+        # /attachments URLs the gmail and drive tools hand back.
         - name: WORKSPACE_EXTERNAL_URL
           value: "https://gws.mcphub.no"
         - name: WORKSPACE_MCP_BASE_URI
@@ -116,9 +128,9 @@ spec:
         - name: tmp
           mountPath: /tmp
       volumes:
-      # emptyDir, not a PVC: a restart forces every caller to re-authorize,
-      # which is the conservative default. Swap in a PVC (and keep replicas: 1)
-      # if re-consent on every deploy becomes annoying.
+      # emptyDir is enough: in external-provider mode no credentials are
+      # persisted, so /data only ever holds the attachment spool and the log.
+      # A restart costs nothing but unresolved attachment links.
       - name: data
         emptyDir:
           sizeLimit: 512Mi
