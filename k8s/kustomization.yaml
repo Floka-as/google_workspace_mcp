@@ -13,4 +13,4 @@ resources:
 images:
   - name: gws-mcp:latest
     newName: europe-north1-docker.pkg.dev/solvr-multitenant/internal-artifacts/gws-mcp
-    newTag: "latest"
+    newTag: "be531ce"
