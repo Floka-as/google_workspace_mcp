@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gws-mcp
+  namespace: mcphub
+  labels:
+    app: gws-mcp
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: OAuth 2.1 proxy state (authorization codes,
+  # PKCE verifiers, client registrations) lives in memory, and per-user Google
+  # credentials live on an emptyDir. Two pods serving the same host would hand
+  # out codes one of them cannot redeem.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gws-mcp
+  template:
+    metadata:
+      labels:
+        app: gws-mcp
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # emptyDir volumes mount root-owned 0755 without this; the process
+        # writes credentials, the attachment spool and its log under /data.
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: gws-mcp
+        image: gws-mcp:latest
+        # The upstream image's CMD shells out to `uv run main.py`, which wants a
+        # writable /app to re-sync the environment. Calling the venv's python
+        # directly skips that, which is what lets readOnlyRootFilesystem stand.
+        command: ["/app/.venv/bin/python", "main.py", "--transport", "streamable-http"]
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        # OAuth 2.1 multi-user: every caller runs its own Google consent flow
+        # against this host and gets its own token. The pod holds only the
+        # OAuth *client* credentials, never a user's refresh token on disk
+        # beyond the ephemeral volume below — the same shape as fiken-mcp's
+        # passthrough mode, which is what makes a public ingress defensible.
+        - name: MCP_ENABLE_OAUTH21
+          value: "true"
+        - name: WORKSPACE_MCP_HOST
+          value: "0.0.0.0"
+        - name: WORKSPACE_MCP_PORT
+          value: "8000"
+        # Behind the nginx ingress: all OAuth endpoints and the redirect URI are
+        # advertised as this URL. https://gws.mcphub.no/oauth2callback must be
+        # registered on the Google OAuth client (see README-deploy.md).
+        - name: WORKSPACE_EXTERNAL_URL
+          value: "https://gws.mcphub.no"
+        - name: WORKSPACE_MCP_BASE_URI
+          value: "https://gws.mcphub.no"
+        - name: OAUTHLIB_INSECURE_TRANSPORT
+          value: "0"
+        # Only Calendar, Gmail and Drive are exposed. Widening this also widens
+        # the OAuth scopes requested at consent, so re-consent is required.
+        - name: WORKSPACE_MCP_TOOLS
+          value: "calendar,gmail,drive"
+        # Everything the process writes goes to the ephemeral /data volume:
+        # per-user credentials, attachment spool, and any HOME-relative cache.
+        - name: WORKSPACE_MCP_CREDENTIALS_DIR
+          value: /data/credentials
+        - name: WORKSPACE_ATTACHMENT_DIR
+          value: /data/attachments
+        - name: HOME
+          value: /data
+        - name: XDG_CACHE_HOME
+          value: /tmp
+        - name: GOOGLE_OAUTH_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-credentials-google
+              key: client_id
+        - name: GOOGLE_OAUTH_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-credentials-google
+              key: client_secret
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      # emptyDir, not a PVC: a restart forces every caller to re-authorize,
+      # which is the conservative default. Swap in a PVC (and keep replicas: 1)
+      # if re-consent on every deploy becomes annoying.
+      - name: data
+        emptyDir:
+          sizeLimit: 512Mi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 256Mi

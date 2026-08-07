@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gws-mcp
+  namespace: mcphub
+  labels:
+    app: gws-mcp
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # The MCP endpoint streams SSE; the default 60s proxy read timeout would cut
+    # long tool calls short.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - gws.mcphub.no
+    secretName: gws-mcphub-no-tls
+  rules:
+  - host: gws.mcphub.no
+    http:
+      paths:
+      # The whole host is routed, unlike fiken-mcp's /mcp-only ingress: OAuth 2.1
+      # needs /.well-known/oauth-*, /authorize, /token, /register and
+      # /oauth2callback reachable, and those are registered by FastMCP's OAuth
+      # proxy rather than by this repo, so enumerating them here would rot.
+      #
+      # What that also exposes: /health and / (version JSON) and
+      # /attachments/{uuid4} (capability URLs into an ephemeral spool). /mcp
+      # itself is protected — MCP_ENABLE_OAUTH21=true means an unauthenticated
+      # caller gets a 401 and a pointer to the authorization server.
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gws-mcp
+            port:
+              number: 8000
