@@ -7,16 +7,8 @@ metadata:
     app: gws-mcp
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
-    # ingress-nginx -> Traefik migration (Floka-as/infra docs/traefik-migration.md):
-    # DNS points at Traefik. Remove to roll back to ingress-nginx (TTL 300s).
-    external-dns.alpha.kubernetes.io/target: "34.88.148.166"
-    # The MCP endpoint streams SSE; the default 60s proxy read timeout would cut
-    # long tool calls short.
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
   - hosts:
     - gws.mcphub.no
